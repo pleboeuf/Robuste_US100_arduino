@@ -5,13 +5,13 @@
 
 // Firmware Parameters
 //********************************************************************************************************
-#define FirmwareVersion 1.0 .0            // Version initiale du code.
+#define FirmwareVersion 1.0.1             // Version initiale du code.
 #define MaxHeatingPowerPercent 90         // Puissance maximale appliqué sur la résistance de chauffage
 #define HeatingSetPoint 25                // Température cible à l'intérieur du boitier
 #define ExceedRangeUS100 9999             // Distance maximale valide pour le captgeur
 #define numReadings 10                    // Number of readings to average for filtering
 #define useThermistor           true      // Use onboard thermistor for temperature measurement
-#define ThermistorPIN 0                   // Analog Pin 0
+#define ThermistorPIN A0                   // Analog Pin 0
 //********************************************************************************************************
 
 #define sensorNotTiltedRedLED    LOW      // Corresponding Red LED control level
@@ -30,6 +30,7 @@ float enclosureTemp = 20;
 const byte rxPin = 2;       // SoftwareSerial RX pin
 const byte txPin = 4;       // SoftwareSerial TX pin
 const byte TiltSW = 3;      // Tilt Switch input pin
+const byte zero = 0;        
 
 // Status Indicators
 // GREEN:    State= Not tilted,    Heating OFF
@@ -54,7 +55,7 @@ int HeatingLimitPercent = MaxHeatingPowerPercent; // Puissance maximale appliqu�
 int LedState = LOW;
 int HeatingPower = 0;
 bool Tilt = HIGH;
-bool TempRequest = false;
+int TempRequest = 0; // 0:no temp request, 1:US100 temp request, 2:thermistor temp request
 bool thermistorSuccess = true;
 
 unsigned long Period = 500;
@@ -95,11 +96,11 @@ void setup() {
 void loop() {
   // Monitor the data on the serial ports
   checkSerialPorts();
+
   // Do additional processing every "Period" ms
   unsigned long LoopTime = millis();
-  if (LoopTime > nextSampleTime) {
+   if (LoopTime > nextSampleTime) {
     nextSampleTime = LoopTime + Period - 1;
-
     // First Adjust heating as required
     float thermistorReading = Thermistor(analogRead(ThermistorPIN)); // read ADC and  convert it to Celsius
     if (useThermistor && thermistorSuccess ) {
@@ -110,7 +111,6 @@ void loop() {
       enclosureTemp = TempUS100;
     }
     simpleThermostat(HeatingSetPoint, enclosureTemp);
-
     // Then flash the Arduino Led to show activities
     LedState = !LedState;
     digitalWrite(Led, LedState);
@@ -128,13 +128,26 @@ void checkSerialPorts() {
   // Forward data from Serial to US100
   if (Serial.available()) {
     oneByteFromSerial = Serial.read(); // Read one byte from the Serial port
-    US100.write(oneByteFromSerial); // Forward it to the US100 sensor
-    // Find if its a request for temperature
-    // Writing a 0X50 byte request the US100 to send the temperature
-    if (oneByteFromSerial == 0X50) {
-      TempRequest = true; // Yes, it's a request for temperature
-    } else {
-      TempRequest = false; // No, must be a request for distance.
+    switch (oneByteFromSerial) {
+     case 'P': // 0X50 - Request for temperature
+         US100.write(oneByteFromSerial); // Forward it to the US100 sensor
+        TempRequest = 1; // It's a request for US100 temperature
+        break;
+       case 'U': // 0X55 - Request for distance
+        // if nothing else matches, do the default
+        US100.write(oneByteFromSerial); // Forward it to the US100 sensor
+        TempRequest = 0; // No, must be a request for distance.
+        break;
+      case 'Z': // 0X5A - Request for thermistor temperature
+        //do something when var equals 0X5A
+        TempRequest = 2; // It's a request for thermistor temperature
+        Serial.write((byte) (enclosureTemp + 45)); // Simulate output from US100 by substracting 45
+        break;
+      default:
+        // Unknown request - Let it got through US100
+        US100.write(oneByteFromSerial); // Forward it to the US100 sensor
+        TempRequest = 0; // No, must be a request for distance.
+        break;
     }
   }
   // Forward data from US100 to Serial
@@ -145,16 +158,16 @@ void checkSerialPorts() {
       Serial.write(oneByteFromUS100);
     } else {
       // Sensor IS Tilted
-      if (!TempRequest) {
+      if (!(TempRequest == 1)) {
         // It's not a temperature request. Return "0" to indicate invalid data in case of tilt
-        Serial.write("0");
+        Serial.write(zero);
       } else {
         // Its a temperature request, let the data go throught
         Serial.write(oneByteFromUS100);
       }
     }
     // Intercept the temperature readings from the US100 and average it
-    if (TempRequest) {
+    if (TempRequest == 1) {
       Temp45 = oneByteFromUS100;
       if ((Temp45 > 1) && (Temp45 < 130)) // Verify if its within acceptable range
       {
