@@ -5,7 +5,7 @@
 
 // Firmware Parameters
 //********************************************************************************************************
-#define FirmwareVersion 1.0.1             // Version initiale du code.
+#define FirmwareVersion 1.0.2             // Version initiale du code.
 #define MaxHeatingPowerPercent 90         // Puissance maximale appliqué sur la résistance de chauffage
 #define HeatingSetPoint 25                // Température cible à l'intérieur du boitier
 #define ExceedRangeUS100 9999             // Distance maximale valide pour le captgeur
@@ -30,7 +30,7 @@ float enclosureTemp = 20;
 const byte rxPin = 2;       // SoftwareSerial RX pin
 const byte txPin = 4;       // SoftwareSerial TX pin
 const byte TiltSW = 3;      // Tilt Switch input pin
-const byte zero = 0;        
+const byte zero = 0;
 
 // Status Indicators
 // GREEN:    State= Not tilted,    Heating OFF
@@ -52,7 +52,7 @@ int TempUS100 = 0;
 int allTempReadings[numReadings];
 int HeatingLimitPercent = MaxHeatingPowerPercent; // Puissance maximale appliqué sur la résistance de chauffage
 
-int LedState = LOW;
+bool LedState = LOW;
 int HeatingPower = 0;
 bool Tilt = HIGH;
 int TempRequest = 0; // 0:no temp request, 1:US100 temp request, 2:thermistor temp request
@@ -69,6 +69,7 @@ void setup() {
   // Set the data rate for the SoftwareSerial port
   US100.begin(9600);  // Start SoftwareSerial port
   Serial.begin(9600); // Start Serial port
+  Serial.flush();     // Make sure buffer is empty
 
   // Set I/O pin mode
   pinMode(13, OUTPUT); // Set Activity LED pin to OUTPUT
@@ -99,21 +100,21 @@ void loop() {
 
   // Do additional processing every "Period" ms
   unsigned long LoopTime = millis();
-   if (LoopTime > nextSampleTime) {
+  if (LoopTime > nextSampleTime) {
     nextSampleTime = LoopTime + Period - 1;
     // First Adjust heating as required
     float thermistorReading = Thermistor(analogRead(ThermistorPIN)); // read ADC and  convert it to Celsius
+    delay(2);
     if (useThermistor && thermistorSuccess ) {
       // Use the temperature measured by the onboard thermistor
       enclosureTemp = thermistorReading;
     } else {
       // Use the temperature measured by the US100 sensor
-      enclosureTemp = TempUS100;
+      enclosureTemp = 26;
     }
     simpleThermostat(HeatingSetPoint, enclosureTemp);
+    //    bool Tilt = checkTiltSW(); // check tilt ans set RGB Led color.
     // Then flash the Arduino Led to show activities
-    LedState = !LedState;
-    digitalWrite(Led, LedState);
     setStatusLED(); //Set RGB status led
   }
 }
@@ -124,60 +125,25 @@ void checkSerialPorts() {
   char oneByteFromSerial = 0; // One byte buffer for data comming from Serial port
   char oneByteFromUS100 = 0; // One byte buffer for data comming from US100 port
   int Temp45 = 0; // Raw temperature reading
-  bool Tilt = checkTiltSW();
+
   // Forward data from Serial to US100
   if (Serial.available()) {
-    oneByteFromSerial = Serial.read(); // Read one byte from the Serial port
-    switch (oneByteFromSerial) {
-     case 'P': // 0X50 - Request for temperature
-         US100.write(oneByteFromSerial); // Forward it to the US100 sensor
-        TempRequest = 1; // It's a request for US100 temperature
-        break;
-       case 'U': // 0X55 - Request for distance
-        // if nothing else matches, do the default
-        US100.write(oneByteFromSerial); // Forward it to the US100 sensor
-        TempRequest = 0; // No, must be a request for distance.
-        break;
-      case 'Z': // 0X5A - Request for thermistor temperature
-        //do something when var equals 0X5A
-        TempRequest = 2; // It's a request for thermistor temperature
-        Serial.write((byte) (enclosureTemp + 45)); // Simulate output from US100 by substracting 45
-        break;
-      default:
-        // Unknown request - Let it got through US100
-        US100.write(oneByteFromSerial); // Forward it to the US100 sensor
-        TempRequest = 0; // No, must be a request for distance.
-        break;
-    }
+    oneByteFromSerial = Serial.read(); // Read one byte from the Serial port    
+    US100.write(oneByteFromSerial); // Forward it to the US100 sensor
+    LedState = HIGH;
+    digitalWrite(Led, LedState);
   }
+
   // Forward data from US100 to Serial
   if (US100.available()) {
     oneByteFromUS100 = US100.read(); // Read one byte from the US100
-    if (!Tilt) {
-      // Sensor is NOT tilted, forward data byte as is
-      Serial.write(oneByteFromUS100);
-    } else {
-      // Sensor IS Tilted
-      if (!(TempRequest == 1)) {
-        // It's not a temperature request. Return "0" to indicate invalid data in case of tilt
-        Serial.write(zero);
-      } else {
-        // Its a temperature request, let the data go throught
-        Serial.write(oneByteFromUS100);
-      }
-    }
-    // Intercept the temperature readings from the US100 and average it
-    if (TempRequest == 1) {
-      Temp45 = oneByteFromUS100;
-      if ((Temp45 > 1) && (Temp45 < 130)) // Verify if its within acceptable range
-      {
-        TempUS100 = AvgTempReading(Temp45 - 45) / numReadings; //Conversion en température réelle et filtrage
-      } else {
-        TempUS100 = HeatingSetPoint - 5; // Force operation of the heater
-        //                                HeatingLimitPercent = 60; // at 50% power
-      }
-    }
+    Serial.write(oneByteFromUS100);
+    LedState = HIGH;
+    digitalWrite(Led, LedState);
   }
+  delay (2);
+  LedState = LOW;
+  digitalWrite(Led, LedState);
 }
 
 // Check the state of the TILT Switch and adjust the color of the status LED
@@ -248,3 +214,6 @@ float Thermistor(int RawADC) {
 
   return Temp;                                // Return the Temperature
 }
+
+
+
